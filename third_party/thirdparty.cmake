@@ -1,0 +1,18 @@
+set(MP_INCLUDE_DIR
+  ${MP_INCLUDE_DIR}
+  ${THIRD_PARTY_SOURCE_DIR}/spdlog/include
+)
+
+if (BUILD_OPUS)
+  #THIRDPARTY-OPUS PART
+  set(MP_INCLUDE_DIR
+    ${MP_INCLUDE_DIR}
+    ${THIRD_PARTY_SOURCE_DIR}/opus/include
+  )
+
+  #THIRDPARTY-OGG PART
+  set(MP_INCLUDE_DIR
+    ${MP_INCLUDE_DIR}
+    ${THIRD_PARTY_SOURCE_DIR}/libogg/include
+  )
+endif ()

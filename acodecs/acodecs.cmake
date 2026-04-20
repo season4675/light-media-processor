@@ -1,0 +1,16 @@
+
+# codec-opus
+if (BUILD_OPUS)
+  set(OGGOPUS_SOURCE_DIR ${ACODEC_SOURCE_DIR}/opus)
+  set(LIBOPUS_SOURCE_DIR ${THIRD_PARTY_SOURCE_DIR}/opus)
+  set(MP_INCLUDE_DIR
+    ${MP_INCLUDE_DIR}
+    ${LIBOPUS_SOURCE_DIR}
+    ${THIRD_PARTY_SOURCE_DIR}
+    ${OGGOPUS_SOURCE_DIR}/include
+  )
+  set(MP_SOURCE_FILES
+    ${MP_SOURCE_FILES}
+    ${OGGOPUS_SOURCE_DIR}/src/oggopus_encoder.cpp
+  )
+endif ()
