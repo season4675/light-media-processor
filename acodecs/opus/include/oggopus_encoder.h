@@ -107,64 +107,16 @@ class OggOpusEncoder {
 
   void SetDebugMode(bool enable);
 
-  // ===== 兼容旧版 API 接口 =====
-  // 这些接口用于兼容 pcm_to_opus.cpp 的调用
-  
-  /**
-   * @brief 旧版创建接口（带回调函数）
-   */
-  int OggopusEncoderCreate(void* callback, void* user_data, 
-                           uint32_t sample_rate = 16000, 
-                           uint32_t channels = 1);
-  
-  /**
-   * @brief 旧版编码接口（输入 PCM 字节数据）
-   */
-  int OggopusEncode(const char* pcm_data, int data_len);
-  
-  /**
-   * @brief 获取编码后数据大小
-   */
-  int OggopusGetOuputSize();
-  
-  /**
-   * @brief 获取编码后数据
-   */
-  int OggopusGetOuput(unsigned char* output_buf, int buf_size);
-  
-  /**
-   * @brief 推入编码后的数据到内部缓冲区
-   */
-  int OggopusPushEncodedData(const uint8_t* encoded_data, int data_len);
-  
-  /**
-   * @brief 软重置编码器
-   */
-  int OggopusSoftRestart();
-  
-  /**
-   * @brief 销毁编码器
-   */
-  int OggopusDestroy();
-
  private:
+  // 辅助函数：计算剩余可编码帧数
   size_t RemainingFrames(int depth = 16);
-  int EncodePcm16Packet(uint8_t* encoded_data, size_t encoded_buf_cap,
-                   size_t& encoded_size, bool is_eof);
-  int EncodePcm24Packet(uint8_t* encoded_data, size_t encoded_buf_cap,
-                     size_t& encoded_size, bool is_eof);
-  int EncodePcm24PacketDirectly(const int32_t* pcm_data, size_t frame_size,
-                             uint8_t* encoded_buf, size_t encoded_buf_cap,
-                             size_t& encoded_size, bool is_eof);
-  int EncodePcm32Packet(uint8_t* encoded_data, size_t encoded_buf_cap,
-                     size_t& encoded_size, bool is_eof);
-  int EncodePcm32PacketDirectly(const float* pcm_data, size_t frame_size,
-                             uint8_t* encoded_buf, size_t encoded_buf_cap,
-                             size_t& encoded_size, bool is_eof);
+  
+  // 核心编码函数：根据 depth 自动选择 Opus API
   int EncodeInner(const void* pcm_data, size_t samples,
-                       uint8_t* encoded_data, size_t encoded_buf_cap,
-                       size_t& encoded_size, bool is_eof, int depth = 16);
+                  uint8_t* encoded_data, size_t encoded_buf_cap,
+                  size_t& encoded_size, bool is_eof, int depth = 16);
 
+  // 重置参数
   void ResetParameters();
 
  private:
@@ -184,11 +136,6 @@ class OggOpusEncoder {
   std::string app_type_;
   std::string user_comment_;
   bool debug_;
-  
-  // 兼容旧版 API 的内部缓冲区
-  std::vector<uint8_t> encoded_data_buffer_;  // 存储编码后的数据
-  void* encoded_callback_;                     // 编码数据回调函数
-  void* callback_user_data_;                   // 回调用户数据
 };
 
 }  // namespace mproc

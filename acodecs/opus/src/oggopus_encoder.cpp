@@ -138,10 +138,7 @@ OggOpusEncoder::OggOpusEncoder()
       enable_constraint_vbr_(false),
       app_type_("AUDIO"),
       user_comment_(""),
-      debug_(false),
-      encoded_data_buffer_(),
-      encoded_callback_(nullptr),
-      callback_user_data_(nullptr) {}
+      debug_(false) {}
 
 OggOpusEncoder::~OggOpusEncoder() { Destroy(); }
 
@@ -887,120 +884,6 @@ void OggOpusEncoder::SetDebugMode(bool enable) {
   if (ogg_opus_para_) {
     ogg_opus_para_->debug = debug_;
   }
-}
-
-// ===== 兼容旧版 API 接口实现 =====
-
-int OggOpusEncoder::OggopusEncoderCreate(void* callback, void* user_data,
-                                         uint32_t sample_rate,
-                                         uint32_t channels) {
-  encoded_callback_ = callback;
-  callback_user_data_ = user_data;
-  return Create(sample_rate, channels);
-}
-
-int OggOpusEncoder::OggopusEncode(const char* pcm_data, int data_len) {
-  if (!ogg_opus_para_ || !pcm_data || data_len <= 0) {
-    return kOggOpusInvalidState;
-  }
-
-  // 将 PCM 数据写入缓存
-  const size_t total_bytes = static_cast<size_t>(data_len);
-  const size_t total_samples = total_bytes / sizeof(int16_t);
-
-  // 写入 PCM16 缓存
-  ogg_opus_para_->cache_pcm16_.insert(
-      ogg_opus_para_->cache_pcm16_.end(),
-      reinterpret_cast<const int16_t*>(pcm_data),
-      reinterpret_cast<const int16_t*>(pcm_data) + total_samples);
-
-  // 检查是否有足够的数据进行编码
-  const size_t samples_needed = frame_sample_num_ * channels_;
-  if (ogg_opus_para_->cache_pcm16_.size() < samples_needed) {
-    return kSuccess;  // 数据不足，等待更多数据
-  }
-
-  // 从缓存读取一帧数据（保持 PCM16 格式）
-  auto input_buffer = std::make_unique<int16_t[]>(samples_needed);
-  const size_t samples_read = ReadPcm16FromCache(
-      ogg_opus_para_->cache_pcm16_, input_buffer.get(), samples_needed);
-
-  if (samples_read < samples_needed) {
-    SPDLOG_WARN("Insufficient samples read: {} < {}", samples_read,
-                samples_needed);
-    return kOggOpusEncodeFailed;
-  }
-
-  // 执行编码
-  std::vector<uint8_t> encoded_buf(ogg_opus_para_->max_frame_bytes_);
-  size_t encoded_size = 0;
-
-  int ret = EncodeInner(input_buffer.get(), samples_read, encoded_buf.data(),
-                        encoded_buf.size(), encoded_size, false, 32);
-
-  if (ret != kSuccess) {
-    return ret;
-  }
-
-  // 将编码后的数据推入内部缓冲区
-  if (encoded_size > 0) {
-    encoded_data_buffer_.insert(encoded_data_buffer_.end(),
-                                encoded_buf.begin(),
-                                encoded_buf.begin() + encoded_size);
-  }
-
-  return kSuccess;
-}
-
-int OggOpusEncoder::OggopusGetOuputSize() {
-  return static_cast<int>(encoded_data_buffer_.size());
-}
-
-int OggOpusEncoder::OggopusGetOuput(unsigned char* output_buf, int buf_size) {
-  if (!output_buf || buf_size <= 0) {
-    return 0;
-  }
-
-  const size_t available = encoded_data_buffer_.size();
-  const size_t to_copy = std::min(static_cast<size_t>(buf_size), available);
-
-  if (to_copy > 0) {
-    std::memcpy(output_buf, encoded_data_buffer_.data(), to_copy);
-    // 移除已读取的数据
-    encoded_data_buffer_.erase(encoded_data_buffer_.begin(),
-                               encoded_data_buffer_.begin() + to_copy);
-  }
-
-  return static_cast<int>(to_copy);
-}
-
-int OggOpusEncoder::OggopusPushEncodedData(const uint8_t* encoded_data,
-                                           int data_len) {
-  if (!encoded_data || data_len <= 0) {
-    return kInvalidInputParams;
-  }
-
-  // 如果有回调函数，则调用回调
-  if (encoded_callback_) {
-    using CallbackType = size_t (*)(const uint8_t*, int, void*);
-    auto callback = reinterpret_cast<CallbackType>(encoded_callback_);
-    callback(encoded_data, data_len, callback_user_data_);
-  }
-
-  // 同时也存入内部缓冲区
-  encoded_data_buffer_.insert(encoded_data_buffer_.end(),
-                              encoded_data,
-                              encoded_data + data_len);
-
-  return kSuccess;
-}
-
-int OggOpusEncoder::OggopusSoftRestart() {
-  return SoftReset();
-}
-
-int OggOpusEncoder::OggopusDestroy() {
-  return Destroy();
 }
 
 }  // namespace mproc

@@ -26,22 +26,16 @@ class PcmToOpus : public IFeatureProcessor {
   MediaStatus Destroy();
   MediaStatus Process(MediaPacket& input, MediaConfig& src_frame,
                       MediaPacket& output, MediaConfig& dst_frame,
-                      bool& update);
+                      bool& update) override;
   MediaStatus Reset();
 
-  /**
-   * @brief 将OggOpus待编码数据送入
-   * @return 成功返回0，失败返回负值
-   */
-  int pushback_encoded_data(const uint8_t* encoded_data, int data_len);
-
  private:
-  MediaStatus create_locked();
-  MediaStatus destroy_locked();
+  MediaStatus CreateLocked();
+  MediaStatus DestroyLocked();
 
   MediaContext* ctx_handler_;
   OggOpusEncoder* encoder_;
-  std::vector<uint8_t> cache_;
+  std::vector<uint8_t> cache_;  // 保留用于兼容
   std::mutex encoder_lock_;
   int channels_;
   int sample_rate_;
