@@ -77,14 +77,14 @@ size_t WritePcm32ToCache(const float* pcm_data, size_t samples,
   return cache.size();
 }
 
-// 从缓存读取 PCM16 并转换为 float
-size_t ReadPcm16FromCache(std::vector<int16_t>& cache, float* output,
+// 从缓存读取 PCM16（不转换，保持原始格式）
+size_t ReadPcm16FromCache(std::vector<int16_t>& cache, int16_t* output,
                           size_t samples_needed) {
   const size_t samples_available = cache.size();
   const size_t samples_to_read = std::min(samples_available, samples_needed);
 
   if (samples_to_read > 0) {
-    Pcm16ToFloat(cache.data(), output, samples_to_read);
+    std::memcpy(output, cache.data(), samples_to_read * sizeof(int16_t));
     // 移除已读取的数据
     cache.erase(cache.begin(), cache.begin() + samples_to_read);
   }
@@ -92,14 +92,14 @@ size_t ReadPcm16FromCache(std::vector<int16_t>& cache, float* output,
   return samples_to_read;
 }
 
-// 从缓存读取 PCM24 并转换为 float
-size_t ReadPcm24FromCache(std::vector<int32_t>& cache, float* output,
+// 从缓存读取 PCM24（不转换，保持原始格式）
+size_t ReadPcm24FromCache(std::vector<int32_t>& cache, int32_t* output,
                           size_t samples_needed) {
   const size_t samples_available = cache.size();
   const size_t samples_to_read = std::min(samples_available, samples_needed);
 
   if (samples_to_read > 0) {
-    Pcm24ToFloat(cache.data(), output, samples_to_read);
+    std::memcpy(output, cache.data(), samples_to_read * sizeof(int32_t));
     // 移除已读取的数据
     cache.erase(cache.begin(), cache.begin() + samples_to_read);
   }
@@ -107,7 +107,7 @@ size_t ReadPcm24FromCache(std::vector<int32_t>& cache, float* output,
   return samples_to_read;
 }
 
-// 从缓存读取 PCM32(float) 
+// 从缓存读取 PCM32(float)（不转换，保持原始格式）
 size_t ReadPcm32FromCache(std::vector<float>& cache, float* output,
                           size_t samples_needed) {
   const size_t samples_available = cache.size();
@@ -375,9 +375,9 @@ int OggOpusEncoder::Create(uint32_t sample_rate, uint32_t channels) {
     return kOggInitFailed;
   }
 
-  // 分配输入缓冲区（float 格式）
-  ogg_opus_para_->input_pcm_ = new float[frame_sample_num_ * channels_]{};
-  if (ogg_opus_para_->input_pcm_ == nullptr) {
+  // 分配输入缓冲区（float 格式，用于 PCM32）
+  ogg_opus_para_->input_pcm32_ = new float[frame_sample_num_ * channels_]{};
+  if (ogg_opus_para_->input_pcm32_ == nullptr) {
     SPDLOG_ERROR("Failed to allocate input buffer");
     return kMemAllocError;
   }
@@ -418,15 +418,15 @@ int OggOpusEncoder::Destroy() {
     ogg_opus_para_->packet_ = nullptr;
   }
 
-  if (ogg_opus_para_->input_pcm_) {
-    delete[] ogg_opus_para_->input_pcm_;
-    ogg_opus_para_->input_pcm_ = nullptr;
+  if (ogg_opus_para_->input_pcm32_) {
+    delete[] ogg_opus_para_->input_pcm32_;
+    ogg_opus_para_->input_pcm32_ = nullptr;
   }
 
   // 清空缓存
   ogg_opus_para_->cache_pcm16_.clear();
   ogg_opus_para_->cache_pcm24_.clear();
-  ogg_opus_para_->cache_pcm_.clear();
+  ogg_opus_para_->cache_pcm32_.clear();
 
   delete ogg_opus_para_;
   ogg_opus_para_ = nullptr;
@@ -446,30 +446,38 @@ int OggOpusEncoder::Encode(const int16_t* pcm_data, size_t frame_size,
     return kOggOpusInvalidState;
   }
 
+  const size_t samples_per_frame = frame_sample_num_ * channels_;
   const size_t total_samples = frame_size * channels_;
 
-  // 将 PCM16 数据写入缓存
+  // 路径1：数据刚好一帧且缓存为空，直接编码（高性能路径）
+  if (ogg_opus_para_->cache_pcm16_.empty() && total_samples == samples_per_frame) {
+    // 直接编码
+    return EncodeInner(pcm_data, total_samples, encoded_buf,
+                       encoded_buf_cap, encoded_size, is_eof, 16);
+  }
+
+  // 路径2：存入缓存，然后从缓存取出一帧进行编码
   WritePcm16ToCache(pcm_data, total_samples, ogg_opus_para_->cache_pcm16_);
 
-  // 检查是否有足够的数据进行编码
-  if (ogg_opus_para_->cache_pcm16_.size() < frame_sample_num_ * channels_) {
+  // 检查缓存是否有足够数据
+  if (ogg_opus_para_->cache_pcm16_.size() < samples_per_frame) {
     return kSuccess;  // 数据不足，等待更多数据
   }
 
-  // 从缓存读取一帧数据并转换为 float
+  // 从缓存读取一帧数据（保持 PCM16 格式）
+  auto pcm_buffer = std::make_unique<int16_t[]>(samples_per_frame);
   const size_t samples_read = ReadPcm16FromCache(
-      ogg_opus_para_->cache_pcm16_, ogg_opus_para_->input_pcm_,
-      frame_sample_num_ * channels_);
+      ogg_opus_para_->cache_pcm16_, pcm_buffer.get(), samples_per_frame);
 
-  if (samples_read < frame_sample_num_ * channels_) {
+  if (samples_read < samples_per_frame) {
     SPDLOG_WARN("Insufficient samples read: {} < {}", samples_read,
-                frame_sample_num_ * channels_);
+                samples_per_frame);
     return kOggOpusEncodeFailed;
   }
 
-  // 执行编码
-  return EncodeInner(ogg_opus_para_->input_pcm_, samples_read, encoded_buf,
-                     encoded_buf_cap, encoded_size, is_eof, 32);
+  // 编码缓存中的数据（depth=16，内部调用 opus_multistream_encode）
+  return EncodeInner(pcm_buffer.get(), samples_read, encoded_buf,
+                     encoded_buf_cap, encoded_size, is_eof, 16);
 }
 
 int OggOpusEncoder::Encode24(const int32_t* pcm_data, size_t frame_size,
@@ -482,30 +490,38 @@ int OggOpusEncoder::Encode24(const int32_t* pcm_data, size_t frame_size,
     return kOggOpusInvalidState;
   }
 
+  const size_t samples_per_frame = frame_sample_num_ * channels_;
   const size_t total_samples = frame_size * channels_;
 
-  // 将 PCM24 数据写入缓存
+  // 路径1：数据刚好一帧且缓存为空，直接编码（高性能路径）
+  if (ogg_opus_para_->cache_pcm24_.empty() && total_samples == samples_per_frame) {
+    // 直接编码 PCM24
+    return EncodeInner(pcm_data, total_samples, encoded_buf,
+                       encoded_buf_cap, encoded_size, is_eof, 24);
+  }
+
+  // 路径2：存入缓存，然后从缓存取出一帧进行编码
   WritePcm24ToCache(pcm_data, total_samples, ogg_opus_para_->cache_pcm24_);
 
-  // 检查是否有足够的数据进行编码
-  if (ogg_opus_para_->cache_pcm24_.size() < frame_sample_num_ * channels_) {
+  // 检查缓存是否有足够数据
+  if (ogg_opus_para_->cache_pcm24_.size() < samples_per_frame) {
     return kSuccess;  // 数据不足，等待更多数据
   }
 
-  // 从缓存读取一帧数据并转换为 float
+  // 从缓存读取一帧数据（保持 PCM24 格式）
+  auto pcm_buffer = std::make_unique<int32_t[]>(samples_per_frame);
   const size_t samples_read = ReadPcm24FromCache(
-      ogg_opus_para_->cache_pcm24_, ogg_opus_para_->input_pcm_,
-      frame_sample_num_ * channels_);
+      ogg_opus_para_->cache_pcm24_, pcm_buffer.get(), samples_per_frame);
 
-  if (samples_read < frame_sample_num_ * channels_) {
+  if (samples_read < samples_per_frame) {
     SPDLOG_WARN("Insufficient samples read: {} < {}", samples_read,
-                frame_sample_num_ * channels_);
+                samples_per_frame);
     return kOggOpusEncodeFailed;
   }
 
-  // 执行编码
-  return EncodeInner(ogg_opus_para_->input_pcm_, samples_read, encoded_buf,
-                     encoded_buf_cap, encoded_size, is_eof, 32);
+  // 编码缓存中的数据（depth=24，内部调用 opus_multistream_encode24）
+  return EncodeInner(pcm_buffer.get(), samples_read, encoded_buf,
+                     encoded_buf_cap, encoded_size, is_eof, 24);
 }
 
 int OggOpusEncoder::EncodeFloat(const float* pcm_data, size_t frame_size,
@@ -518,29 +534,37 @@ int OggOpusEncoder::EncodeFloat(const float* pcm_data, size_t frame_size,
     return kOggOpusInvalidState;
   }
 
+  const size_t samples_per_frame = frame_sample_num_ * channels_;
   const size_t total_samples = frame_size * channels_;
 
-  // 将 PCM32(float) 数据写入缓存
-  WritePcm32ToCache(pcm_data, total_samples, ogg_opus_para_->cache_pcm_);
+  // 路径1：数据刚好一帧且缓存为空，直接编码（高性能路径）
+  if (ogg_opus_para_->cache_pcm32_.empty() && total_samples == samples_per_frame) {
+    // 直接编码 PCM32 (float)
+    return EncodeInner(pcm_data, total_samples, encoded_buf,
+                       encoded_buf_cap, encoded_size, is_eof, 32);
+  }
 
-  // 检查是否有足够的数据进行编码
-  if (ogg_opus_para_->cache_pcm_.size() < frame_sample_num_ * channels_) {
+  // 路径2：存入缓存，然后从缓存取出一帧进行编码
+  WritePcm32ToCache(pcm_data, total_samples, ogg_opus_para_->cache_pcm32_);
+
+  // 检查缓存是否有足够数据
+  if (ogg_opus_para_->cache_pcm32_.size() < samples_per_frame) {
     return kSuccess;  // 数据不足，等待更多数据
   }
 
-  // 从缓存读取一帧数据
+  // 从缓存读取一帧数据（保持 PCM32 float 格式）
+  auto pcm_buffer = std::make_unique<float[]>(samples_per_frame);
   const size_t samples_read = ReadPcm32FromCache(
-      ogg_opus_para_->cache_pcm_, ogg_opus_para_->input_pcm_,
-      frame_sample_num_ * channels_);
+      ogg_opus_para_->cache_pcm32_, pcm_buffer.get(), samples_per_frame);
 
-  if (samples_read < frame_sample_num_ * channels_) {
+  if (samples_read < samples_per_frame) {
     SPDLOG_WARN("Insufficient samples read: {} < {}", samples_read,
-                frame_sample_num_ * channels_);
+                samples_per_frame);
     return kOggOpusEncodeFailed;
   }
 
-  // 执行编码
-  return EncodeInner(ogg_opus_para_->input_pcm_, samples_read, encoded_buf,
+  // 编码缓存中的数据（depth=32，内部调用 opus_multistream_encode_float）
+  return EncodeInner(pcm_buffer.get(), samples_read, encoded_buf,
                      encoded_buf_cap, encoded_size, is_eof, 32);
 }
 
@@ -560,7 +584,7 @@ int OggOpusEncoder::Flush(uint8_t* encoded_buf, size_t encoded_buf_cap,
   } else if (depth == 24) {
     remaining_samples = ogg_opus_para_->cache_pcm24_.size();
   } else if (depth == 32) {
-    remaining_samples = ogg_opus_para_->cache_pcm_.size();
+    remaining_samples = ogg_opus_para_->cache_pcm32_.size();
   }
 
   if (remaining_samples == 0) {
@@ -570,26 +594,35 @@ int OggOpusEncoder::Flush(uint8_t* encoded_buf, size_t encoded_buf_cap,
   // 读取剩余数据
   size_t samples_read = 0;
   if (depth == 16) {
+    auto pcm_buffer = std::make_unique<int16_t[]>(frame_sample_num_ * channels_);
     samples_read = ReadPcm16FromCache(ogg_opus_para_->cache_pcm16_,
-                                      ogg_opus_para_->input_pcm_,
+                                      pcm_buffer.get(),
                                       frame_sample_num_ * channels_);
+    if (samples_read > 0) {
+      return EncodeInner(pcm_buffer.get(), samples_read, encoded_buf,
+                         encoded_buf_cap, encoded_size, is_eof, 16);
+    }
   } else if (depth == 24) {
+    auto pcm_buffer = std::make_unique<int32_t[]>(frame_sample_num_ * channels_);
     samples_read = ReadPcm24FromCache(ogg_opus_para_->cache_pcm24_,
-                                      ogg_opus_para_->input_pcm_,
+                                      pcm_buffer.get(),
                                       frame_sample_num_ * channels_);
+    if (samples_read > 0) {
+      return EncodeInner(pcm_buffer.get(), samples_read, encoded_buf,
+                         encoded_buf_cap, encoded_size, is_eof, 24);
+    }
   } else if (depth == 32) {
-    samples_read = ReadPcm32FromCache(ogg_opus_para_->cache_pcm_,
-                                      ogg_opus_para_->input_pcm_,
+    auto pcm_buffer = std::make_unique<float[]>(frame_sample_num_ * channels_);
+    samples_read = ReadPcm32FromCache(ogg_opus_para_->cache_pcm32_,
+                                      pcm_buffer.get(),
                                       frame_sample_num_ * channels_);
+    if (samples_read > 0) {
+      return EncodeInner(pcm_buffer.get(), samples_read, encoded_buf,
+                         encoded_buf_cap, encoded_size, is_eof, 32);
+    }
   }
 
-  if (samples_read == 0) {
-    return kSuccess;
-  }
-
-  // 编码剩余数据
-  return EncodeInner(ogg_opus_para_->input_pcm_, samples_read, encoded_buf,
-                     encoded_buf_cap, encoded_size, is_eof, 32);
+  return kSuccess;
 }
 
 int OggOpusEncoder::SoftReset() {
@@ -600,7 +633,7 @@ int OggOpusEncoder::SoftReset() {
   // 清空缓存
   ogg_opus_para_->cache_pcm16_.clear();
   ogg_opus_para_->cache_pcm24_.clear();
-  ogg_opus_para_->cache_pcm_.clear();
+  ogg_opus_para_->cache_pcm32_.clear();
 
   return kSuccess;
 }
@@ -616,7 +649,7 @@ size_t OggOpusEncoder::RemainingFrames(int depth) {
   } else if (depth == 24) {
     cached_samples = ogg_opus_para_->cache_pcm24_.size();
   } else if (depth == 32) {
-    cached_samples = ogg_opus_para_->cache_pcm_.size();
+    cached_samples = ogg_opus_para_->cache_pcm32_.size();
   }
 
   const size_t samples_per_frame = frame_sample_num_ * channels_;
@@ -716,11 +749,11 @@ void OggOpusEncoder::SetSampleRate(int sample_rate) {
   if (ogg_opus_para_) {
     ogg_opus_para_->max_frame_bytes_ = frame_sample_bytes_ * 2;
 
-    // 重新分配输入缓冲区
-    if (ogg_opus_para_->input_pcm_) {
-      delete[] ogg_opus_para_->input_pcm_;
+    // 重新分配输入缓冲区（PCM32）
+    if (ogg_opus_para_->input_pcm32_) {
+      delete[] ogg_opus_para_->input_pcm32_;
     }
-    ogg_opus_para_->input_pcm_ = new float[frame_sample_num_ * channels_]{};
+    ogg_opus_para_->input_pcm32_ = new float[frame_sample_num_ * channels_]{};
 
     // 重新分配输出缓冲区
     if (ogg_opus_para_->packet_) {
@@ -765,10 +798,10 @@ int OggOpusEncoder::SetFrameSampleBytes(uint32_t bytes) {
       ogg_opus_para_->packet_ = new uint8_t[ogg_opus_para_->max_frame_bytes_]{};
     }
 
-    if (ogg_opus_para_->input_pcm_) {
-      delete[] ogg_opus_para_->input_pcm_;
+    if (ogg_opus_para_->input_pcm32_) {
+      delete[] ogg_opus_para_->input_pcm32_;
     }
-    ogg_opus_para_->input_pcm_ = new float[frame_sample_num_ * channels_]{};
+    ogg_opus_para_->input_pcm32_ = new float[frame_sample_num_ * channels_]{};
 
     if (debug_) {
       SPDLOG_DEBUG(
@@ -790,10 +823,10 @@ void OggOpusEncoder::SetChannelNum(int ch) {
   if (ogg_opus_para_) {
     ogg_opus_para_->max_frame_bytes_ = frame_sample_bytes_ * 2;
 
-    if (ogg_opus_para_->input_pcm_) {
-      delete[] ogg_opus_para_->input_pcm_;
+    if (ogg_opus_para_->input_pcm32_) {
+      delete[] ogg_opus_para_->input_pcm32_;
     }
-    ogg_opus_para_->input_pcm_ = new float[frame_sample_num_ * channels_]{};
+    ogg_opus_para_->input_pcm32_ = new float[frame_sample_num_ * channels_]{};
 
     if (ogg_opus_para_->packet_) {
       delete[] ogg_opus_para_->packet_;
@@ -832,10 +865,10 @@ int OggOpusEncoder::SetFrameSize(uint32_t ms) {
       ogg_opus_para_->packet_ = new uint8_t[ogg_opus_para_->max_frame_bytes_]{};
     }
 
-    if (ogg_opus_para_->input_pcm_) {
-      delete[] ogg_opus_para_->input_pcm_;
+    if (ogg_opus_para_->input_pcm32_) {
+      delete[] ogg_opus_para_->input_pcm32_;
     }
-    ogg_opus_para_->input_pcm_ = new float[frame_sample_num_ * channels_]{};
+    ogg_opus_para_->input_pcm32_ = new float[frame_sample_num_ * channels_]{};
 
     if (debug_) {
       SPDLOG_DEBUG(
@@ -887,8 +920,8 @@ int OggOpusEncoder::OggopusEncode(const char* pcm_data, int data_len) {
     return kSuccess;  // 数据不足，等待更多数据
   }
 
-  // 从缓存读取一帧数据并转换为 float
-  auto input_buffer = std::make_unique<float[]>(samples_needed);
+  // 从缓存读取一帧数据（保持 PCM16 格式）
+  auto input_buffer = std::make_unique<int16_t[]>(samples_needed);
   const size_t samples_read = ReadPcm16FromCache(
       ogg_opus_para_->cache_pcm16_, input_buffer.get(), samples_needed);
 

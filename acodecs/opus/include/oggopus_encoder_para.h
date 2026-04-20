@@ -22,7 +22,7 @@ class OggOpusEncoderPara {
         packet_(nullptr),
         input_pcm16_(nullptr),
         input_pcm24(nullptr),
-        input_pcm_(nullptr),
+        input_pcm32_(nullptr),
         input_samples_(0),
         audio_functions(nullptr),
         last_granulepos(0),
@@ -60,8 +60,8 @@ class OggOpusEncoderPara {
   opus_int16 *input_pcm16_; // 从缓存得到的待编码 PCM 数据 (opus_int16 格式)
   std::vector<opus_int32> cache_pcm24_;
   opus_int32 *input_pcm24; // 从缓存得到的待编码 PCM 数据 (opus_int32 格式)
-  std::vector<float> cache_pcm_;
-  float *input_pcm_; // 从缓存得到的待编码 PCM 数据 (float 格式)
+  std::vector<float> cache_pcm32_;
+  float *input_pcm32_; // 从缓存得到的待编码 PCM 数据 (float 格式)
   size_t input_samples_; // 从缓存得到的待编码样本数
   /* I/O */
   OggEncodeOpt ogg_encode_opt;
